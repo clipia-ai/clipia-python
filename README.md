@@ -17,7 +17,7 @@ webhooks. The DX mirrors fal.ai, but is Clipia-native (credits, not USD).
 ## Install
 
 ```bash
-pip install clipia
+pip install clipia-ai
 ```
 
 Requires Python 3.9+.
