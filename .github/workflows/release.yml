@@ -3,8 +3,12 @@ name: Release to PyPI
 # Trusted Publishing (OIDC) — без долгоживущего токена.
 # Срабатывает при публикации GitHub Release. Сборка → publish по короткоживущему
 # OIDC-токену, привязанному к этому репо+workflow (настраивается на PyPI как
-# trusted publisher; pending publisher: project=clipia, owner=clipia-ai,
+# trusted publisher; pending publisher: project=clipia-ai, owner=clipia-ai,
 # repo=clipia-python, workflow=release.yml).
+#
+# ИСТОЧНИК ПРАВДЫ — приватный монорепо sdk/python/.github/workflows/release.yml;
+# сюда (clipia-ai/clipia-python) попадает зеркалированием. Не редактировать в
+# зеркале напрямую — перезапишется синком.
 
 on:
   release:
