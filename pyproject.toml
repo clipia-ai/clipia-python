@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "clipia-ai"
+name = "clipia"
 version = "1.0.0"
 description = "Official Python SDK for the Clipia public API (image & video generation, fal-style queue)."
 readme = "README.md"
