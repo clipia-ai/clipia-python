@@ -219,6 +219,29 @@ def test_subscribe_polls_until_completed() -> None:
 
 
 @respx.mock
+def test_subscribe_stops_on_canceled() -> None:
+    # Регрессия: CANCELED — терминальный, subscribe не должен зависнуть.
+    respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        return_value=httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"})
+    )
+    respx.get(f"{BASE_URL}/v1/requests/{RID}/status").mock(
+        side_effect=[
+            httpx.Response(200, json={"request_id": RID, "status": "IN_PROGRESS"}),
+            httpx.Response(200, json={"request_id": RID, "status": "CANCELED"}),
+        ]
+    )
+    respx.get(f"{BASE_URL}/v1/requests/{RID}").mock(
+        return_value=httpx.Response(200, json={"request_id": RID, "status": "CANCELED"})
+    )
+
+    client = make_client()
+    result = client.subscribe(
+        "nano-banana-2", input={"prompt": "x"}, poll_interval=0.0, timeout=5.0
+    )
+    assert result.status == "CANCELED"
+
+
+@respx.mock
 def test_subscribe_times_out() -> None:
     respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
         return_value=httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"})

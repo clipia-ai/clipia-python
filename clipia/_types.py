@@ -18,12 +18,16 @@ except ImportError:  # pragma: no cover - 3.9 always has it, defensive only
     from typing_extensions import TypedDict  # type: ignore
 
 # Queue lifecycle statuses (mirror the HTTP API contract).
+# CANCELED is terminal: a generation can be canceled out-of-band (e.g. from the
+# Clipia web UI) — the public API has no cancel endpoint, but ``status`` may
+# still report CANCELED, so ``subscribe`` must stop polling on it.
 IN_QUEUE = "IN_QUEUE"
 IN_PROGRESS = "IN_PROGRESS"
 COMPLETED = "COMPLETED"
 FAILED = "FAILED"
+CANCELED = "CANCELED"
 
-TERMINAL_STATUSES = frozenset({COMPLETED, FAILED})
+TERMINAL_STATUSES = frozenset({COMPLETED, FAILED, CANCELED})
 
 
 @dataclass
