@@ -18,6 +18,11 @@ import time
 from typing import Mapping, Optional, Union
 
 SIGNATURE_HEADER = "x-clipia-signature"
+# Informational only. ``verify_signature`` deliberately does NOT read this
+# header: the authoritative timestamp is the ``t=`` field inside the *signed*
+# ``X-Clipia-Signature`` value, so it is covered by the HMAC. The standalone
+# ``X-Clipia-Timestamp`` header is unsigned — never use it for verification or
+# replay checks (doing so would open an unauditable timestamp-spoofing path).
 TIMESTAMP_HEADER = "x-clipia-timestamp"
 DEFAULT_TOLERANCE_SECONDS = 300
 
@@ -63,40 +68,50 @@ def verify_signature(
 
     Returns:
         ``True`` only when the signature matches AND the timestamp is within
-        ``tolerance_seconds``. Never raises on malformed input; returns
-        ``False`` instead so callers can safely reject.
+        ``tolerance_seconds``. Never raises on malformed input (including a
+        non-UTF-8 ``body``); returns ``False`` instead so callers can safely
+        reject. This is fail-closed by design.
     """
     if not secret:
         return False
 
-    lowered = _lower_keyed(headers)
-    raw_sig = lowered.get(SIGNATURE_HEADER)
-    if not raw_sig:
-        return False
-
-    parts = _parse_signature(raw_sig)
-    # The timestamp MUST come from the signed payload (``t=`` in the signature
-    # header). A standalone ``X-Clipia-Timestamp`` header is not covered by the
-    # HMAC, so trusting it would open an unauditable timestamp-spoofing path.
-    timestamp = parts.get("t")
-    provided = parts.get("v1")
-    if not timestamp or not provided:
-        return False
-
-    # Freshness window.
+    # Fail-closed: any malformed input (bad header, non-UTF-8 body, etc.) must
+    # yield ``False`` rather than propagate an exception, so callers can safely
+    # reject without a try/except of their own.
     try:
-        ts_int = int(timestamp)
-    except (TypeError, ValueError):
-        return False
-    current = now if now is not None else time.time()
-    if abs(current - ts_int) > tolerance_seconds:
-        return False
+        lowered = _lower_keyed(headers)
+        raw_sig = lowered.get(SIGNATURE_HEADER)
+        if not raw_sig:
+            return False
 
-    body_str = body.decode("utf-8") if isinstance(body, bytes) else body
-    expected = _compute_signature(secret, timestamp, body_str)
+        parts = _parse_signature(raw_sig)
+        # The timestamp MUST come from the signed payload (``t=`` in the
+        # signature header). A standalone ``X-Clipia-Timestamp`` header is not
+        # covered by the HMAC, so trusting it would open an unauditable
+        # timestamp-spoofing path.
+        timestamp = parts.get("t")
+        provided = parts.get("v1")
+        if not timestamp or not provided:
+            return False
 
-    # Constant-time comparison.
-    return hmac.compare_digest(provided, expected)
+        # Freshness window.
+        try:
+            ts_int = int(timestamp)
+        except (TypeError, ValueError):
+            return False
+        current = now if now is not None else time.time()
+        if abs(current - ts_int) > tolerance_seconds:
+            return False
+
+        # A non-UTF-8 ``body`` cannot match a signature computed over the
+        # UTF-8 wire bytes, so reject it rather than raise ``UnicodeDecodeError``.
+        body_str = body.decode("utf-8") if isinstance(body, bytes) else body
+        expected = _compute_signature(secret, timestamp, body_str)
+
+        # Constant-time comparison.
+        return hmac.compare_digest(provided, expected)
+    except Exception:  # noqa: BLE001 - fail-closed: never raise on bad input
+        return False
 
 
 __all__ = ["verify_signature", "SIGNATURE_HEADER", "TIMESTAMP_HEADER"]

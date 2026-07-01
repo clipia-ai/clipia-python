@@ -27,6 +27,12 @@ from ._async_client import AsyncClipia
 from ._client import Clipia
 from ._errors import ClipiaApiError, ClipiaTimeoutError
 from ._types import (
+    CANCELED,
+    COMPLETED,
+    FAILED,
+    IN_PROGRESS,
+    IN_QUEUE,
+    TERMINAL_STATUSES,
     EstimateResponse,
     ResultResponse,
     StatusResponse,
@@ -44,6 +50,14 @@ __all__ = [
     "StatusResponse",
     "ResultResponse",
     "EstimateResponse",
+    # Lifecycle status constants (parity with the TS SDK's `export *`). All five
+    # are valid `status` values; the three in TERMINAL_STATUSES stop polling.
+    "IN_QUEUE",
+    "IN_PROGRESS",
+    "COMPLETED",
+    "FAILED",
+    "CANCELED",
+    "TERMINAL_STATUSES",
     "verify_signature",
     "__version__",
 ]

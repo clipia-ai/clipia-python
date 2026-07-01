@@ -16,6 +16,9 @@ class ClipiaApiError(Exception):
         message: human-readable error message.
         type: error category from the envelope (e.g. ``invalid_request_error``).
         body: the parsed JSON body, when available.
+        retry_after: parsed ``Retry-After`` delay in seconds, when the server
+            sent one (typically on ``429``/``503``). ``None`` otherwise. Used by
+            ``subscribe`` to pace transient retries.
     """
 
     def __init__(
@@ -26,16 +29,24 @@ class ClipiaApiError(Exception):
         *,
         type: str = "",  # noqa: A002 - mirrors the API field name
         body: Optional[Dict[str, Any]] = None,
+        retry_after: Optional[float] = None,
     ) -> None:
         self.status = status
         self.code = code
         self.message = message or code or f"HTTP {status}"
         self.type = type
         self.body = body
+        self.retry_after = retry_after
         super().__init__(f"[{status}] {self.code or 'error'}: {self.message}")
 
     @classmethod
-    def from_response(cls, status: int, body: Optional[Dict[str, Any]]) -> "ClipiaApiError":
+    def from_response(
+        cls,
+        status: int,
+        body: Optional[Dict[str, Any]],
+        *,
+        retry_after: Optional[float] = None,
+    ) -> "ClipiaApiError":
         """Build an error from a parsed response body (``{"error": {...}}``)."""
         err: Dict[str, Any] = {}
         if isinstance(body, dict) and isinstance(body.get("error"), dict):
@@ -46,6 +57,7 @@ class ClipiaApiError(Exception):
             message=str(err.get("message", "")),
             type=str(err.get("type", "")),
             body=body if isinstance(body, dict) else None,
+            retry_after=retry_after,
         )
 
 

@@ -181,6 +181,7 @@ __all__ = [
     "IN_PROGRESS",
     "COMPLETED",
     "FAILED",
+    "CANCELED",
     "TERMINAL_STATUSES",
     "SubmitResponse",
     "StatusResponse",

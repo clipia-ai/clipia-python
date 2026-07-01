@@ -242,6 +242,90 @@ def test_subscribe_stops_on_canceled() -> None:
 
 
 @respx.mock
+def test_subscribe_retries_transient_503_during_poll() -> None:
+    # A single 503 mid-poll must be retried, not surface as a failure.
+    respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        return_value=httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"})
+    )
+    respx.get(f"{BASE_URL}/v1/requests/{RID}/status").mock(
+        side_effect=[
+            httpx.Response(503, json={"error": {"code": "service_unavailable"}}),
+            httpx.Response(200, json={"request_id": RID, "status": "COMPLETED"}),
+        ]
+    )
+    respx.get(f"{BASE_URL}/v1/requests/{RID}").mock(
+        return_value=httpx.Response(
+            200, json={"request_id": RID, "status": "COMPLETED", "output": {"ok": True}}
+        )
+    )
+    client = make_client()
+    result = client.subscribe(
+        "nano-banana-2", input={"prompt": "x"}, poll_interval=0.0, timeout=10.0
+    )
+    assert result.status == "COMPLETED"
+
+
+@respx.mock
+def test_subscribe_gives_up_after_max_poll_retries() -> None:
+    respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        return_value=httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"})
+    )
+    respx.get(f"{BASE_URL}/v1/requests/{RID}/status").mock(
+        return_value=httpx.Response(500, json={"error": {"code": "internal_error"}})
+    )
+    client = make_client()
+    with pytest.raises(ClipiaApiError) as exc:
+        client.subscribe(
+            "nano-banana-2", input={"prompt": "x"}, poll_interval=0.0, timeout=10.0
+        )
+    assert exc.value.status == 500
+
+
+@respx.mock
+def test_subscribe_does_not_retry_non_transient_error() -> None:
+    respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        return_value=httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"})
+    )
+    route = respx.get(f"{BASE_URL}/v1/requests/{RID}/status").mock(
+        return_value=httpx.Response(404, json={"error": {"code": "not_found"}})
+    )
+    client = make_client()
+    with pytest.raises(ClipiaApiError) as exc:
+        client.subscribe(
+            "nano-banana-2", input={"prompt": "x"}, poll_interval=0.0, timeout=10.0
+        )
+    assert exc.value.status == 404
+    # Polled exactly once — a 404 is not retried.
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_subscribe_honors_retry_after_header_seconds() -> None:
+    # Retry-After is parsed onto the error so subscribe can pace its retry.
+    respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        return_value=httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"})
+    )
+    respx.get(f"{BASE_URL}/v1/requests/{RID}/status").mock(
+        side_effect=[
+            httpx.Response(
+                429,
+                json={"error": {"code": "rate_limited"}},
+                headers={"Retry-After": "0"},
+            ),
+            httpx.Response(200, json={"request_id": RID, "status": "COMPLETED"}),
+        ]
+    )
+    respx.get(f"{BASE_URL}/v1/requests/{RID}").mock(
+        return_value=httpx.Response(200, json={"request_id": RID, "status": "COMPLETED"})
+    )
+    client = make_client()
+    result = client.subscribe(
+        "nano-banana-2", input={"prompt": "x"}, poll_interval=0.0, timeout=10.0
+    )
+    assert result.status == "COMPLETED"
+
+
+@respx.mock
 def test_subscribe_times_out() -> None:
     respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
         return_value=httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"})

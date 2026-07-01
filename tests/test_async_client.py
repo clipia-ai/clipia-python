@@ -109,6 +109,48 @@ async def test_async_subscribe_async_callback() -> None:
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_async_subscribe_retries_transient_then_completes() -> None:
+    respx.post(f"{BASE_URL}/v1/models/m").mock(
+        return_value=httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"})
+    )
+    respx.get(f"{BASE_URL}/v1/requests/{RID}/status").mock(
+        side_effect=[
+            httpx.Response(502, json={"error": {"code": "bad_gateway"}}),
+            httpx.Response(200, json={"request_id": RID, "status": "COMPLETED"}),
+        ]
+    )
+    respx.get(f"{BASE_URL}/v1/requests/{RID}").mock(
+        return_value=httpx.Response(
+            200, json={"request_id": RID, "status": "COMPLETED", "output": {"ok": True}}
+        )
+    )
+    async with make_client() as client:
+        result = await client.subscribe(
+            "m", input={"prompt": "x"}, poll_interval=0.0, timeout=10.0
+        )
+    assert result.status == "COMPLETED"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_subscribe_does_not_retry_non_transient() -> None:
+    respx.post(f"{BASE_URL}/v1/models/m").mock(
+        return_value=httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"})
+    )
+    route = respx.get(f"{BASE_URL}/v1/requests/{RID}/status").mock(
+        return_value=httpx.Response(403, json={"error": {"code": "forbidden"}})
+    )
+    async with make_client() as client:
+        with pytest.raises(ClipiaApiError) as exc:
+            await client.subscribe(
+                "m", input={"prompt": "x"}, poll_interval=0.0, timeout=10.0
+            )
+    assert exc.value.status == 403
+    assert route.call_count == 1
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_async_subscribe_times_out() -> None:
     respx.post(f"{BASE_URL}/v1/models/m").mock(
         return_value=httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"})

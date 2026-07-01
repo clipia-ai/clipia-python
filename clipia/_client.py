@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Dict, Optional, Union
 from urllib.parse import quote
 
@@ -26,11 +28,42 @@ DEFAULT_TIMEOUT = 60.0
 DEFAULT_POLL_INTERVAL = 1.0
 DEFAULT_SUBSCRIBE_TIMEOUT = 600.0
 
+# Transient failures during polling are retried (bounded) so a single blip on an
+# in-flight request never loses the request_id.
+TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
+MAX_POLL_RETRIES = 4
+MAX_POLL_BACKOFF = 30.0
+
 OnQueueUpdate = Callable[[StatusResponse], None]
 
 
 def _new_idempotency_key() -> str:
     return str(uuid.uuid4())
+
+
+_LOCAL_HTTP_RE = re.compile(r"^http://(localhost|127\.0\.0\.1)(:\d+)?(/|$)")
+
+
+def _validate_base_url(base_url: str) -> str:
+    """Reject non-HTTPS base URLs so the API key never travels in cleartext.
+
+    ``http://localhost`` and ``http://127.0.0.1`` (with optional port/path) are
+    allowed for local development. The host must be *exactly* localhost /
+    127.0.0.1 — a lookalike like ``http://localhost.evil.com`` is rejected.
+    Anything else must be ``https://``.
+    """
+    normalized = base_url.rstrip("/")
+    lowered = normalized.lower()
+    if lowered.startswith("https://"):
+        return normalized
+    if _LOCAL_HTTP_RE.match(lowered):
+        return normalized
+    raise ValueError(
+        "base_url must use https:// (the API key is sent as a Bearer token "
+        "and would leak in cleartext over http). Only http://localhost and "
+        "http://127.0.0.1 are allowed for local development. "
+        f"Got: {base_url!r}"
+    )
 
 
 def _parse_json(response: httpx.Response) -> Any:
@@ -40,10 +73,52 @@ def _parse_json(response: httpx.Response) -> Any:
         return None
 
 
+def _parse_retry_after(response: httpx.Response) -> Optional[float]:
+    """Parse an HTTP ``Retry-After`` header (delta-seconds or HTTP-date) to
+    seconds. Returns ``None`` when absent or unparseable."""
+    raw = response.headers.get("retry-after")
+    if not raw:
+        return None
+    raw = raw.strip()
+    try:
+        seconds = float(raw)
+        return seconds if seconds >= 0 else None
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    delta = when.timestamp() - time.time()
+    return delta if delta > 0 else 0.0
+
+
 def _raise_for_status(response: httpx.Response) -> None:
     if response.status_code < 400:
         return
-    raise ClipiaApiError.from_response(response.status_code, _parse_json(response))
+    raise ClipiaApiError.from_response(
+        response.status_code,
+        _parse_json(response),
+        retry_after=_parse_retry_after(response),
+    )
+
+
+def _is_retryable_poll_error(exc: Exception) -> bool:
+    """Transient errors worth retrying mid-poll: throttling/5xx or a network
+    failure (httpx ``TransportError``)."""
+    if isinstance(exc, ClipiaApiError):
+        return exc.status in TRANSIENT_STATUSES
+    return isinstance(exc, httpx.TransportError)
+
+
+def _poll_backoff(exc: Exception, attempt: int, poll_interval: float) -> float:
+    """Delay before the next retry: server-provided ``Retry-After`` if present,
+    otherwise capped exponential backoff seeded by ``poll_interval``."""
+    if isinstance(exc, ClipiaApiError) and exc.retry_after is not None:
+        return exc.retry_after
+    return min(poll_interval * (2 ** attempt), MAX_POLL_BACKOFF)
 
 
 class _Models:
@@ -103,7 +178,7 @@ class Clipia:
             raise ValueError("api_key is required")
         # Protected: never expose the key via ``vars()``/``pprint``/repr.
         self._api_key = api_key
-        self.base_url = base_url.rstrip("/")
+        self.base_url = _validate_base_url(base_url)
         self._http = httpx.Client(
             base_url=self.base_url,
             timeout=timeout,
@@ -201,8 +276,24 @@ class Clipia:
             idempotency_key=idempotency_key,
         )
         deadline = time.monotonic() + timeout
+        # Consecutive transient failures while polling. A single 5xx/429/network
+        # blip on an in-flight request must not lose the request_id.
+        transient_failures = 0
         while True:
-            status = self.status(job.request_id)
+            try:
+                status = self.status(job.request_id)
+                transient_failures = 0
+            except Exception as exc:  # noqa: BLE001 - re-raised unless transient
+                if (
+                    not _is_retryable_poll_error(exc)
+                    or transient_failures >= MAX_POLL_RETRIES
+                ):
+                    raise
+                transient_failures += 1
+                if time.monotonic() >= deadline:
+                    raise ClipiaTimeoutError(job.request_id, timeout) from exc
+                time.sleep(_poll_backoff(exc, transient_failures, poll_interval))
+                continue
             if on_queue_update is not None:
                 on_queue_update(status)
             if status.is_terminal:

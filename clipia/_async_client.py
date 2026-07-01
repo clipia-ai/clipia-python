@@ -13,6 +13,13 @@ from urllib.parse import quote
 
 import httpx
 
+from ._client import (
+    MAX_POLL_RETRIES,
+    _is_retryable_poll_error,
+    _parse_retry_after,
+    _poll_backoff,
+    _validate_base_url,
+)
 from ._errors import ClipiaApiError, ClipiaTimeoutError
 from ._types import (
     Account,
@@ -48,7 +55,11 @@ def _parse_json(response: httpx.Response) -> Any:
 def _raise_for_status(response: httpx.Response) -> None:
     if response.status_code < 400:
         return
-    raise ClipiaApiError.from_response(response.status_code, _parse_json(response))
+    raise ClipiaApiError.from_response(
+        response.status_code,
+        _parse_json(response),
+        retry_after=_parse_retry_after(response),
+    )
 
 
 class _AsyncModels:
@@ -102,7 +113,7 @@ class AsyncClipia:
             raise ValueError("api_key is required")
         # Protected: never expose the key via ``vars()``/``pprint``/repr.
         self._api_key = api_key
-        self.base_url = base_url.rstrip("/")
+        self.base_url = _validate_base_url(base_url)
         self._http = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=timeout,
@@ -191,8 +202,26 @@ class AsyncClipia:
             idempotency_key=idempotency_key,
         )
         deadline = time.monotonic() + timeout
+        # Consecutive transient failures while polling. A single 5xx/429/network
+        # blip on an in-flight request must not lose the request_id.
+        transient_failures = 0
         while True:
-            status = await self.status(job.request_id)
+            try:
+                status = await self.status(job.request_id)
+                transient_failures = 0
+            except Exception as exc:  # noqa: BLE001 - re-raised unless transient
+                if (
+                    not _is_retryable_poll_error(exc)
+                    or transient_failures >= MAX_POLL_RETRIES
+                ):
+                    raise
+                transient_failures += 1
+                if time.monotonic() >= deadline:
+                    raise ClipiaTimeoutError(job.request_id, timeout) from exc
+                await asyncio.sleep(
+                    _poll_backoff(exc, transient_failures, poll_interval)
+                )
+                continue
             if on_queue_update is not None:
                 maybe = on_queue_update(status)
                 if asyncio.iscoroutine(maybe):

@@ -103,6 +103,31 @@ def test_verify_ignores_standalone_timestamp_header() -> None:
     assert verify_signature(SECRET, headers, body) is False
 
 
+def test_verify_non_utf8_body_returns_false_not_raises() -> None:
+    # A non-UTF-8 body must yield False (fail-closed), never raise
+    # UnicodeDecodeError — the docstring promises a bool return.
+    ts = int(time.time())
+    bad_body = b"\xff\xfe\x00bad-bytes"  # invalid UTF-8
+    # Sign over *some* valid string so only the body decode can fail.
+    sig = _sign(SECRET, ts, "{}")
+    headers = {"X-Clipia-Signature": f"t={ts},v1={sig}"}
+    result = verify_signature(SECRET, headers, bad_body)
+    assert result is False
+    assert isinstance(result, bool)
+
+
+def test_verify_always_returns_bool_on_garbage_headers() -> None:
+    # Even a wildly malformed headers mapping must return a bool, not raise.
+    class Weird:
+        def __str__(self) -> str:
+            return "x-clipia-signature"
+
+    headers = {Weird(): "t=oops,v1=zz"}
+    result = verify_signature(SECRET, headers, b"\xff\xfe")
+    assert result is False
+    assert isinstance(result, bool)
+
+
 def test_verify_uses_now_override() -> None:
     ts = 1_717_243_200
     body = '{"request_id":"abc"}'
