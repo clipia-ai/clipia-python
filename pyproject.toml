@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clipia"
-version = "1.0.1"
-description = "Official Python SDK for the Clipia public API (image & video generation, fal-style queue)."
+version = "1.1.0"
+description = "Official Python SDK for the Clipia public API (text model catalog plus image & video generation queue)."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }

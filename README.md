@@ -70,7 +70,7 @@ result = client.result(job.request_id)   # result.pending == True while still ru
 ### Models, cost estimate & account
 
 ```python
-client.models.list()             # { "data": [ ... ] }
+client.models.list()             # text + image/video/audio catalog
 client.models.get("nano-banana-2")
 
 # Deterministic credit cost for an input, before you submit.
@@ -79,6 +79,11 @@ print(est.credits)
 
 client.account.get()             # { "balance": { "credits": ... }, "usage_30d": { ... } }
 ```
+
+The unified catalog also returns OpenAI/OpenRouter-shaped text models such as
+`gpt-5.6-sol`; their entries use `id`, `context_length` and per-token
+`pricing`. Use the standard OpenAI Python SDK with
+`base_url="https://api.clipia.ai/v1"` for chat completions.
 
 The client is also a context manager:
 

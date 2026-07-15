@@ -146,19 +146,38 @@ class ModelPricing(TypedDict, total=False):
     credits_base: int
     multipliers: Dict[str, Any]
     note: str
+    # OpenRouter-compatible LLM catalog rates (USD per token strings).
+    prompt: str
+    completion: str
 
 
 class Model(TypedDict, total=False):
+    # Unified OpenAI/OpenRouter catalog fields (text + generation models).
+    id: str
+    object: str
+    created: int
+    owned_by: str
+    canonical_slug: str
     slug: str
     type: str
     name: str
+    description: str
     capabilities: List[str]
+    context_length: int
+    architecture: Dict[str, Any]
+    top_provider: Dict[str, Any]
+    supported_parameters: List[str]
+    per_request_limits: Any
     pricing: ModelPricing
     input_schema: Dict[str, Any]
 
 
-class ModelList(TypedDict):
+class _ModelListRequired(TypedDict):
     data: List[Model]
+
+
+class ModelList(_ModelListRequired, total=False):
+    object: str
 
 
 class AccountBalance(TypedDict, total=False):

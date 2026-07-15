@@ -176,6 +176,36 @@ def test_models_list_and_get() -> None:
 
 
 @respx.mock
+def test_models_list_accepts_openrouter_llm_entries() -> None:
+    respx.get(f"{BASE_URL}/v1/models").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {
+                        "id": "gpt-5.6-sol",
+                        "canonical_slug": "openai/gpt-5.6-sol",
+                        "object": "model",
+                        "name": "GPT-5.6 Sol",
+                        "context_length": 400000,
+                        "pricing": {
+                            "prompt": "0.00000499875",
+                            "completion": "0.00003",
+                        },
+                    }
+                ],
+            },
+        )
+    )
+    client = make_client()
+    listing = client.models.list()
+    assert listing["object"] == "list"
+    assert listing["data"][0]["id"] == "gpt-5.6-sol"
+    assert listing["data"][0]["pricing"]["completion"] == "0.00003"
+
+
+@respx.mock
 def test_account_get() -> None:
     respx.get(f"{BASE_URL}/v1/account").mock(
         return_value=httpx.Response(200, json={"balance": {"credits": 1840}})
