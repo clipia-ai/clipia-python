@@ -143,16 +143,55 @@ class EstimateResponse:
 
 class ModelPricing(TypedDict, total=False):
     credits: int
+    billing_unit: str
+    unit_size: int
+    character_count: str
+    rounding: str
+    minimum_credits: int
+    available: bool
     credits_base: int
     multipliers: Dict[str, Any]
     note: str
-    # OpenRouter-compatible LLM catalog rates (USD per token strings).
+    # LLM catalog rates in the OpenAI-compatible format (USD per token strings).
     prompt: str
     completion: str
 
 
+class ModelTextLimits(TypedDict, total=False):
+    """Character bounds for the narration text of a text-to-speech model.
+
+    The text travels in ``input["prompt"]`` and is also described in
+    ``input_schema["parameters"]``; a request outside these bounds is rejected with 400
+    before the generation is created, so no credits are reserved.
+    """
+
+    min_chars: int
+    max_chars: int
+
+
+class ModelInputParameter(TypedDict, total=False):
+    name: str
+    type: str
+    required: bool
+    default: Any
+    label: str
+    hint: str
+    options: List[Dict[str, Any]]
+    validation: Dict[str, Any]
+    min: float
+    max: float
+    step: float
+    minLength: int
+    maxLength: int
+
+
+class ModelInputSchema(TypedDict, total=False):
+    parameters: List[ModelInputParameter]
+    parameterGroups: List[Dict[str, Any]]
+
+
 class Model(TypedDict, total=False):
-    # Unified OpenAI/OpenRouter catalog fields (text + generation models).
+    # Unified OpenAI-compatible catalog fields (text + generation models).
     id: str
     object: str
     created: int
@@ -169,7 +208,9 @@ class Model(TypedDict, total=False):
     supported_parameters: List[str]
     per_request_limits: Any
     pricing: ModelPricing
-    input_schema: Dict[str, Any]
+    input_schema: Optional[ModelInputSchema]
+    # Text-to-speech models only: character bounds of the narration text.
+    text_limits: ModelTextLimits
 
 
 class _ModelListRequired(TypedDict):
@@ -209,6 +250,9 @@ __all__ = [
     "Model",
     "ModelList",
     "ModelPricing",
+    "ModelInputSchema",
+    "ModelInputParameter",
+    "ModelTextLimits",
     "Account",
     "AccountBalance",
     "AccountUsage",

@@ -200,3 +200,54 @@ async def test_async_slug_is_url_encoded() -> None:
     assert detail["type"] == "image"
     assert route.called
     assert encoded in str(route.calls.last.request.url)
+
+
+# --- submit retries: one Idempotency-Key per call -----------------------------
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_submit_retries_with_same_key_and_retry_after() -> None:
+    route = respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        side_effect=[
+            httpx.ConnectError("boom"),
+            httpx.Response(
+                429,
+                json={"error": {"code": "concurrency_limit_exceeded", "message": "x"}},
+                headers={"Retry-After": "0"},
+            ),
+            httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"}),
+        ]
+    )
+    async with AsyncClipia(
+        api_key="k", base_url=BASE_URL, retry_delay=0.0, max_retries=2
+    ) as client:
+        job = await client.submit("nano-banana-2", input={"prompt": "x"}, idempotency_key="order-42")
+    assert job.request_id == RID
+    assert [c.request.headers["idempotency-key"] for c in route.calls] == ["order-42"] * 3
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_submit_gives_up_and_skips_non_transient() -> None:
+    route = respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        return_value=httpx.Response(503, json={"error": {"code": "service_unavailable", "message": "x"}})
+    )
+    async with AsyncClipia(api_key="k", base_url=BASE_URL, retry_delay=0.0) as client:
+        with pytest.raises(ClipiaApiError):
+            await client.submit("nano-banana-2", input={"prompt": "x"})
+        assert route.call_count == 3
+
+        route.reset()
+        route.return_value = httpx.Response(
+            402, json={"error": {"code": "subscription_required", "message": "x"}}
+        )
+        with pytest.raises(ClipiaApiError) as exc:
+            await client.submit("nano-banana-2", input={"prompt": "x"})
+        assert exc.value.code == "subscription_required"
+        assert route.call_count == 1
+
+
+def test_async_invalid_retry_config_raises() -> None:
+    with pytest.raises(ValueError):
+        AsyncClipia(api_key="k", base_url=BASE_URL, max_retries=-1)

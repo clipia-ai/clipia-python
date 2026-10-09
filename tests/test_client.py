@@ -176,7 +176,7 @@ def test_models_list_and_get() -> None:
 
 
 @respx.mock
-def test_models_list_accepts_openrouter_llm_entries() -> None:
+def test_models_list_accepts_openai_compatible_llm_entries() -> None:
     respx.get(f"{BASE_URL}/v1/models").mock(
         return_value=httpx.Response(
             200,
@@ -456,3 +456,123 @@ def test_context_manager_closes() -> None:
         client.account.get()
     # After exit, the underlying httpx client is closed.
     assert client._http.is_closed
+
+
+# --- submit retries: one Idempotency-Key per call -----------------------------
+
+
+def make_retry_client(**kwargs) -> Clipia:
+    kwargs.setdefault("retry_delay", 0.0)
+    return Clipia(api_key="clipia_live_test_key", base_url=BASE_URL, **kwargs)
+
+
+@respx.mock
+def test_submit_retries_503_with_same_auto_key() -> None:
+    route = respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        side_effect=[
+            httpx.Response(503, json={"error": {"code": "service_unavailable", "message": "x"}}),
+            httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"}),
+        ]
+    )
+    job = make_retry_client().submit("nano-banana-2", input={"prompt": "x"})
+    assert job.request_id == RID
+    assert route.call_count == 2
+    keys = {c.request.headers["idempotency-key"] for c in route.calls}
+    assert len(keys) == 1
+
+
+@respx.mock
+def test_submit_retries_network_error_keeping_explicit_key() -> None:
+    route = respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        side_effect=[
+            httpx.ConnectError("boom"),
+            httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"}),
+        ]
+    )
+    make_retry_client().submit("nano-banana-2", input={"prompt": "x"}, idempotency_key="order-42")
+    assert [c.request.headers["idempotency-key"] for c in route.calls] == ["order-42", "order-42"]
+
+
+@respx.mock
+def test_submit_honors_retry_after_on_concurrency_limit() -> None:
+    route = respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        side_effect=[
+            httpx.Response(
+                429,
+                json={"error": {"type": "rate_limit_error", "code": "concurrency_limit_exceeded", "message": "x"}},
+                headers={"Retry-After": "0"},
+            ),
+            httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"}),
+        ]
+    )
+    # retry_delay would be 100 s without Retry-After: the test finishing proves the header won.
+    job = make_retry_client(retry_delay=100.0).submit("nano-banana-2", input={"prompt": "x"})
+    assert job.request_id == RID
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_submit_gives_up_after_max_retries() -> None:
+    route = respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        return_value=httpx.Response(502, json={"error": {"code": "bad_gateway", "message": "x"}})
+    )
+    with pytest.raises(ClipiaApiError) as exc:
+        make_retry_client().submit("nano-banana-2", input={"prompt": "x"})
+    assert exc.value.status == 502
+    assert route.call_count == 3  # 1 try + 2 retries (default)
+
+
+@respx.mock
+def test_submit_does_not_retry_billing_error_and_max_retries_zero() -> None:
+    route = respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        return_value=httpx.Response(
+            402, json={"error": {"type": "billing_error", "code": "insufficient_credits", "message": "x"}}
+        )
+    )
+    with pytest.raises(ClipiaApiError) as exc:
+        make_retry_client().submit("nano-banana-2", input={"prompt": "x"})
+    assert exc.value.code == "insufficient_credits"
+    assert route.call_count == 1
+
+    route.reset()
+    route.return_value = httpx.Response(503, json={"error": {"code": "service_unavailable", "message": "x"}})
+    with pytest.raises(ClipiaApiError):
+        make_retry_client(max_retries=0).submit("nano-banana-2", input={"prompt": "x"})
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_subscribe_survives_transient_submit_and_returns_audio() -> None:
+    respx.post(f"{BASE_URL}/v1/models/gemini-3-1-flash-tts").mock(
+        side_effect=[
+            httpx.ConnectError("boom"),
+            httpx.Response(200, json={"request_id": RID, "status": "IN_QUEUE"}),
+        ]
+    )
+    respx.get(f"{BASE_URL}/v1/requests/{RID}/status").mock(
+        return_value=httpx.Response(200, json={"request_id": RID, "status": "COMPLETED"})
+    )
+    respx.get(f"{BASE_URL}/v1/requests/{RID}").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "request_id": RID,
+                "status": "COMPLETED",
+                "output": {"audio": {"url": "https://media.clipia.ai/a.mp3", "format": "mp3"}},
+            },
+        )
+    )
+    result = make_retry_client().subscribe(
+        "gemini-3-1-flash-tts", input={"prompt": "hello", "voice": "Zephyr"}, poll_interval=0.0
+    )
+    assert result.output["audio"]["url"].endswith(".mp3")
+    assert result.output["audio"]["format"] == "mp3"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"max_retries": -1}, {"max_retries": 1.5}, {"max_retries": True}, {"retry_delay": -0.1}],
+)
+def test_invalid_retry_config_raises(kwargs) -> None:
+    with pytest.raises(ValueError):
+        Clipia(api_key="k", base_url=BASE_URL, **kwargs)

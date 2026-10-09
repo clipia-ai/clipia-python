@@ -33,6 +33,10 @@ DEFAULT_SUBSCRIBE_TIMEOUT = 600.0
 TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
 MAX_POLL_RETRIES = 4
 MAX_POLL_BACKOFF = 30.0
+# ``submit`` retries transient failures too, reusing ONE Idempotency-Key per
+# call, so a retry can never enqueue or charge twice.
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_RETRY_DELAY = 0.5
 
 OnQueueUpdate = Callable[[StatusResponse], None]
 
@@ -121,6 +125,27 @@ def _poll_backoff(exc: Exception, attempt: int, poll_interval: float) -> float:
     return min(poll_interval * (2 ** attempt), MAX_POLL_BACKOFF)
 
 
+def _validate_retry_config(max_retries: int, retry_delay: float) -> None:
+    if not isinstance(max_retries, int) or isinstance(max_retries, bool) or max_retries < 0:
+        raise ValueError("max_retries must be a non-negative integer")
+    if not isinstance(retry_delay, (int, float)) or retry_delay < 0:
+        raise ValueError("retry_delay must be a non-negative number")
+
+
+def _submit_payload(
+    input: Dict[str, Any],  # noqa: A002
+    webhook_url: Optional[str],
+    idempotency_key: Optional[str],
+) -> tuple:
+    """Body and headers of a submit call. The Idempotency-Key is fixed once per
+    call so every retry of that call resolves to the same ``request_id``."""
+    body: Dict[str, Any] = {"input": input}
+    if webhook_url is not None:
+        body["webhook_url"] = webhook_url
+    headers = {"Idempotency-Key": idempotency_key or _new_idempotency_key()}
+    return body, headers
+
+
 class _Models:
     """Sub-resource: ``client.models.list()`` / ``client.models.get(slug)`` /
     ``client.models.estimate(slug, input)``."""
@@ -173,9 +198,18 @@ class Clipia:
         base_url: str = DEFAULT_BASE_URL,
         timeout: Union[float, httpx.Timeout, None] = DEFAULT_TIMEOUT,
         transport: Optional[httpx.BaseTransport] = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_delay: float = DEFAULT_RETRY_DELAY,
     ) -> None:
+        """``max_retries`` — transient ``submit`` retries (network error, 429,
+        500/502/503/504) with the same ``Idempotency-Key``; ``0`` disables them.
+        ``retry_delay`` — base of the capped exponential backoff (seconds) used
+        when the server sent no ``Retry-After``."""
         if not api_key:
             raise ValueError("api_key is required")
+        _validate_retry_config(max_retries, retry_delay)
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
         # Protected: never expose the key via ``vars()``/``pprint``/repr.
         self._api_key = api_key
         self.base_url = _validate_base_url(base_url)
@@ -223,16 +257,25 @@ class Clipia:
         webhook_url: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> SubmitResponse:
-        """Queue a generation. Returns immediately with a ``request_id``."""
-        body: Dict[str, Any] = {"input": input}
-        if webhook_url is not None:
-            body["webhook_url"] = webhook_url
-        headers = {"Idempotency-Key": idempotency_key or _new_idempotency_key()}
-        response = self._http.post(
-            f"/v1/models/{quote(model, safe='')}", json=body, headers=headers
-        )
-        _raise_for_status(response)
-        return SubmitResponse.from_dict(_parse_json(response))
+        """Queue a generation. Returns immediately with a ``request_id``.
+
+        Transient failures are retried up to ``max_retries`` times with the
+        same ``Idempotency-Key`` (auto-generated once per call unless given),
+        so a retry can never enqueue or charge twice.
+        """
+        body, headers = _submit_payload(input, webhook_url, idempotency_key)
+        path = f"/v1/models/{quote(model, safe='')}"
+        attempt = 0
+        while True:
+            try:
+                response = self._http.post(path, json=body, headers=headers)
+                _raise_for_status(response)
+                return SubmitResponse.from_dict(_parse_json(response))
+            except Exception as exc:  # noqa: BLE001 - re-raised unless transient
+                if not _is_retryable_poll_error(exc) or attempt >= self.max_retries:
+                    raise
+                time.sleep(_poll_backoff(exc, attempt, self.retry_delay))
+                attempt += 1
 
     def status(self, request_id: str) -> StatusResponse:
         """Fetch the current status of a queued request."""

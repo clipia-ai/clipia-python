@@ -7,18 +7,21 @@ from __future__ import annotations
 
 import asyncio
 import time
-import uuid
 from typing import Any, Awaitable, Callable, Dict, Optional, Union
 from urllib.parse import quote
 
 import httpx
 
 from ._client import (
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_RETRY_DELAY,
     MAX_POLL_RETRIES,
     _is_retryable_poll_error,
     _parse_retry_after,
     _poll_backoff,
+    _submit_payload,
     _validate_base_url,
+    _validate_retry_config,
 )
 from ._errors import ClipiaApiError, ClipiaTimeoutError
 from ._types import (
@@ -39,10 +42,6 @@ DEFAULT_SUBSCRIBE_TIMEOUT = 600.0
 
 # An async subscribe callback may be sync or return an awaitable.
 AsyncOnQueueUpdate = Callable[[StatusResponse], Union[None, Awaitable[None]]]
-
-
-def _new_idempotency_key() -> str:
-    return str(uuid.uuid4())
 
 
 def _parse_json(response: httpx.Response) -> Any:
@@ -108,9 +107,15 @@ class AsyncClipia:
         base_url: str = DEFAULT_BASE_URL,
         timeout: Union[float, httpx.Timeout, None] = DEFAULT_TIMEOUT,
         transport: Optional[httpx.AsyncBaseTransport] = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_delay: float = DEFAULT_RETRY_DELAY,
     ) -> None:
+        """See :class:`clipia.Clipia` for ``max_retries`` / ``retry_delay``."""
         if not api_key:
             raise ValueError("api_key is required")
+        _validate_retry_config(max_retries, retry_delay)
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
         # Protected: never expose the key via ``vars()``/``pprint``/repr.
         self._api_key = api_key
         self.base_url = _validate_base_url(base_url)
@@ -158,15 +163,21 @@ class AsyncClipia:
         webhook_url: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> SubmitResponse:
-        body: Dict[str, Any] = {"input": input}
-        if webhook_url is not None:
-            body["webhook_url"] = webhook_url
-        headers = {"Idempotency-Key": idempotency_key or _new_idempotency_key()}
-        response = await self._http.post(
-            f"/v1/models/{quote(model, safe='')}", json=body, headers=headers
-        )
-        _raise_for_status(response)
-        return SubmitResponse.from_dict(_parse_json(response))
+        """Queue a generation; transient failures are retried with the same
+        ``Idempotency-Key`` (see :meth:`clipia.Clipia.submit`)."""
+        body, headers = _submit_payload(input, webhook_url, idempotency_key)
+        path = f"/v1/models/{quote(model, safe='')}"
+        attempt = 0
+        while True:
+            try:
+                response = await self._http.post(path, json=body, headers=headers)
+                _raise_for_status(response)
+                return SubmitResponse.from_dict(_parse_json(response))
+            except Exception as exc:  # noqa: BLE001 - re-raised unless transient
+                if not _is_retryable_poll_error(exc) or attempt >= self.max_retries:
+                    raise
+                await asyncio.sleep(_poll_backoff(exc, attempt, self.retry_delay))
+                attempt += 1
 
     async def status(self, request_id: str) -> StatusResponse:
         response = await self._http.get(
