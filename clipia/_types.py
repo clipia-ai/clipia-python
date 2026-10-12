@@ -88,6 +88,13 @@ class ResultResponse:
 
     For non-terminal statuses the API replies ``202`` and only the lifecycle
     fields are present; ``output`` stays ``None`` until ``COMPLETED``.
+
+    Audio results carry ``output["audio"]`` (the first track) and
+    ``output["audios"]`` (every track — music models return several variants;
+    the first element equals ``audio``).
+
+    ``cost`` is the reserve while the request is running and the amount actually
+    charged once it is finished (``0`` for ``FAILED`` / ``CANCELED``).
     """
 
     request_id: str
@@ -149,6 +156,10 @@ class ModelPricing(TypedDict, total=False):
     rounding: str
     minimum_credits: int
     available: bool
+    # True when the model works but its price depends on the submitted input
+    # (e.g. the length of the source media): ``credits`` is absent — call
+    # ``estimate`` with the actual input.
+    estimate_required: bool
     credits_base: int
     multipliers: Dict[str, Any]
     note: str
