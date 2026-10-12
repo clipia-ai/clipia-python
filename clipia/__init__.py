@@ -34,6 +34,7 @@ from ._types import (
     IN_QUEUE,
     TERMINAL_STATUSES,
     EstimateResponse,
+    InputWarning,
     ResultResponse,
     StatusResponse,
     SubmitResponse,
@@ -50,6 +51,7 @@ __all__ = [
     "StatusResponse",
     "ResultResponse",
     "EstimateResponse",
+    "InputWarning",
     # Lifecycle status constants (parity with the TS SDK's `export *`). All five
     # are valid `status` values; the three in TERMINAL_STATUSES stop polling.
     "IN_QUEUE",

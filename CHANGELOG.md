@@ -1,5 +1,12 @@
 # Changelog — clipia (Python)
 
+## Unreleased
+
+- Types: `InputWarning` and `warnings` (a list, empty when nothing was ignored)
+  on `SubmitResponse` and `EstimateResponse` — `input` keys the model will not
+  apply (a typo, a parameter of another model). The request is still accepted
+  and handled exactly as before.
+
 ## 1.4.0 — 2026-10-12
 
 - Types: `ModelPricing.estimate_required` (the price depends on the input:

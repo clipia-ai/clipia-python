@@ -86,6 +86,19 @@ print(est.credits)
 client.account.get()             # { "balance": { "credits": ... }, "usage_30d": { ... } }
 ```
 
+### Ignored parameters (`warnings`)
+
+`submit()` and `models.estimate()` still accept an `input` key the model will
+not apply (a typo, a parameter of another model), but the response then carries
+`warnings` — one entry per ignored key, naming it and listing the parameters the
+model declares. The list is empty when everything was accepted.
+
+```python
+for warning in job.warnings:
+    print(warning.code, warning.parameter, warning.message)
+    # unknown_parameter aspect_ration Parameter "aspect_ration" is not recognized and was ignored. …
+```
+
 The unified catalog also returns OpenAI-compatible text models such as
 `gpt-5.6-sol`; their entries use `id`, `context_length` and per-token
 `pricing`. Use the standard OpenAI Python SDK with

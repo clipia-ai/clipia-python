@@ -161,6 +161,64 @@ def test_estimate() -> None:
 
 
 @respx.mock
+def test_submit_and_estimate_expose_ignored_parameters() -> None:
+    warning = {
+        "code": "unsupported_parameter",
+        "parameter": "duration",
+        "message": 'Parameter "duration" is not supported by model "nano-banana-2" and was ignored.',
+    }
+    respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "request_id": RID,
+                "status": "IN_QUEUE",
+                "status_url": f"{BASE_URL}/v1/requests/{RID}/status",
+                "response_url": f"{BASE_URL}/v1/requests/{RID}",
+                "cost": 12,
+                "warnings": [warning],
+            },
+        )
+    )
+    respx.post(f"{BASE_URL}/v1/models/nano-banana-2/estimate").mock(
+        return_value=httpx.Response(200, json={"credits": 12, "warnings": [warning]})
+    )
+    client = make_client()
+
+    job = client.submit("nano-banana-2", input={"prompt": "a cat"})
+    assert [(w.code, w.parameter) for w in job.warnings] == [
+        ("unsupported_parameter", "duration")
+    ]
+    assert job.warnings[0].message == warning["message"]
+
+    est = client.models.estimate("nano-banana-2", {"prompt": "a cat"})
+    assert est.credits == 12
+    assert [w.parameter for w in est.warnings] == ["duration"]
+
+
+@respx.mock
+def test_responses_without_warnings_give_an_empty_list() -> None:
+    respx.post(f"{BASE_URL}/v1/models/nano-banana-2").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "request_id": RID,
+                "status": "IN_QUEUE",
+                "status_url": f"{BASE_URL}/v1/requests/{RID}/status",
+                "response_url": f"{BASE_URL}/v1/requests/{RID}",
+            },
+        )
+    )
+    respx.post(f"{BASE_URL}/v1/models/nano-banana-2/estimate").mock(
+        return_value=httpx.Response(200, json={"credits": 12})
+    )
+    client = make_client()
+
+    assert client.submit("nano-banana-2", input={"prompt": "a cat"}).warnings == []
+    assert client.models.estimate("nano-banana-2", {"prompt": "a cat"}).warnings == []
+
+
+@respx.mock
 def test_models_list_and_get() -> None:
     respx.get(f"{BASE_URL}/v1/models").mock(
         return_value=httpx.Response(200, json={"data": [{"slug": "nano-banana-2"}]})

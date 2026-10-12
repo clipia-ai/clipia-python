@@ -31,6 +31,36 @@ TERMINAL_STATUSES = frozenset({COMPLETED, FAILED, CANCELED})
 
 
 @dataclass
+class InputWarning:
+    """An ``input`` key the model will not apply.
+
+    The request is still accepted and handled exactly as before; the warning
+    only reports the key. ``code`` is ``unknown_parameter`` (the key is not known to the API at
+    all, e.g. a typo) or ``unsupported_parameter`` (the key exists, but this
+    model neither declares nor uses it); new reasons may be added.
+    """
+
+    code: str
+    parameter: str
+    message: str
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "InputWarning":
+        return cls(
+            code=str(data.get("code", "")),
+            parameter=str(data.get("parameter", "")),
+            message=str(data.get("message", "")),
+        )
+
+
+def _parse_warnings(data: Dict[str, Any]) -> List[InputWarning]:
+    raw = data.get("warnings")
+    if not isinstance(raw, list):
+        return []
+    return [InputWarning.from_dict(item) for item in raw if isinstance(item, dict)]
+
+
+@dataclass
 class SubmitResponse:
     """Response of ``POST /v1/models/{model}`` (a freshly queued request)."""
 
@@ -41,6 +71,8 @@ class SubmitResponse:
     response_url: Optional[str] = None
     cost: Optional[int] = None
     data: Dict[str, Any] = field(default_factory=dict)
+    #: ``input`` keys the model will not apply; empty when everything was accepted.
+    warnings: List[InputWarning] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SubmitResponse":
@@ -52,6 +84,7 @@ class SubmitResponse:
             response_url=data.get("response_url"),
             cost=data.get("cost"),
             data=data,
+            warnings=_parse_warnings(data),
         )
 
 
@@ -134,12 +167,15 @@ class EstimateResponse:
 
     credits: int
     data: Dict[str, Any] = field(default_factory=dict)
+    #: ``input`` keys the model will not apply; empty when everything was accepted.
+    warnings: List[InputWarning] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "EstimateResponse":
         return cls(
             credits=data["credits"],
             data=data,
+            warnings=_parse_warnings(data),
         )
 
 
@@ -258,6 +294,7 @@ __all__ = [
     "StatusResponse",
     "ResultResponse",
     "EstimateResponse",
+    "InputWarning",
     "Model",
     "ModelList",
     "ModelPricing",
