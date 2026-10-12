@@ -1,6 +1,6 @@
 # Changelog — clipia (Python)
 
-## Unreleased
+## 1.4.0 — 2026-10-12
 
 - Types: `ModelPricing.estimate_required` (the price depends on the input:
   call `estimate`); audio results document `output["audios"]` (every track —
@@ -23,5 +23,3 @@
 - Audio results document `output["audio"]["format"]` (container derived from
   the CDN file extension; absent when unknown).
 - Internal comments reworded to describe the OpenAI-compatible catalog format.
-
-Not published yet.
