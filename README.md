@@ -99,6 +99,17 @@ for warning in job.warnings:
     # unknown_parameter aspect_ration Parameter "aspect_ration" is not recognized and was ignored. …
 ```
 
+`status()`, `result()` and `subscribe()` use the same field for a parameter
+dropped while the request was running. The only reason so far is
+`audio_dropped`: sound was requested, but the audio track did not pass the
+model's safety check, so the video is generated without sound (the price of the
+request is unchanged).
+
+```python
+if any(w.code == "audio_dropped" for w in result.warnings):
+    print("The video has no sound.")
+```
+
 The unified catalog also returns OpenAI-compatible text models such as
 `gpt-5.6-sol`; their entries use `id`, `context_length` and per-token
 `pricing`. Use the standard OpenAI Python SDK with

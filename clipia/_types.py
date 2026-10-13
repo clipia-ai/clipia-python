@@ -38,6 +38,11 @@ class InputWarning:
     only reports the key. ``code`` is ``unknown_parameter`` (the key is not known to the API at
     all, e.g. a typo) or ``unsupported_parameter`` (the key exists, but this
     model neither declares nor uses it); new reasons may be added.
+
+    Status and result responses use the same shape for a parameter dropped while
+    the request was running: ``audio_dropped`` means sound was requested, but the
+    audio track did not pass the model's safety check — the video is generated
+    without sound and the price of the request is unchanged.
     """
 
     code: str
@@ -98,6 +103,8 @@ class StatusResponse:
     progress: Optional[int] = None
     logs: List[Any] = field(default_factory=list)
     data: Dict[str, Any] = field(default_factory=dict)
+    #: Parameters dropped while the request was running (``audio_dropped``); usually empty.
+    warnings: List[InputWarning] = field(default_factory=list)
 
     @property
     def is_terminal(self) -> bool:
@@ -112,6 +119,7 @@ class StatusResponse:
             progress=data.get("progress"),
             logs=data.get("logs") or [],
             data=data,
+            warnings=_parse_warnings(data),
         )
 
 
@@ -128,6 +136,10 @@ class ResultResponse:
 
     ``cost`` is the reserve while the request is running and the amount actually
     charged once it is finished (``0`` for ``FAILED`` / ``CANCELED``).
+
+    ``warnings`` lists parameters dropped while the request was running. The only
+    reason so far is ``audio_dropped``: the video was generated without sound
+    although sound was requested.
     """
 
     request_id: str
@@ -140,6 +152,8 @@ class ResultResponse:
     completed_at: Optional[str] = None
     pending: bool = False
     data: Dict[str, Any] = field(default_factory=dict)
+    #: Parameters dropped while the request was running (``audio_dropped``); usually empty.
+    warnings: List[InputWarning] = field(default_factory=list)
 
     @property
     def is_terminal(self) -> bool:
@@ -158,6 +172,7 @@ class ResultResponse:
             completed_at=data.get("completed_at"),
             pending=pending,
             data=data,
+            warnings=_parse_warnings(data),
         )
 
 

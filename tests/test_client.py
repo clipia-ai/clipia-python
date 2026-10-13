@@ -142,6 +142,47 @@ def test_result_pending_returns_202_flag() -> None:
     assert result.pending is True
     assert result.status == "IN_PROGRESS"
     # 202 must not raise.
+    assert result.warnings == []
+
+
+@respx.mock
+def test_status_and_result_expose_audio_dropped() -> None:
+    warning = {
+        "code": "audio_dropped",
+        "parameter": "generate_audio",
+        "message": "The video is generated without sound.",
+    }
+    respx.get(f"{BASE_URL}/v1/requests/{RID}/status").mock(
+        return_value=httpx.Response(
+            200,
+            json={"request_id": RID, "status": "IN_PROGRESS", "warnings": [warning]},
+        )
+    )
+    respx.get(f"{BASE_URL}/v1/requests/{RID}").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "request_id": RID,
+                "status": "COMPLETED",
+                "model": "seedance-2-fast-t2v",
+                "output": {"video": {"url": "https://media.clipia.ai/works/x.mp4"}},
+                "cost": 40,
+                "warnings": [warning],
+            },
+        )
+    )
+    client = make_client()
+
+    status = client.status(RID)
+    assert [(w.code, w.parameter) for w in status.warnings] == [
+        ("audio_dropped", "generate_audio")
+    ]
+
+    result = client.result(RID)
+    assert [(w.code, w.parameter) for w in result.warnings] == [
+        ("audio_dropped", "generate_audio")
+    ]
+    assert result.warnings[0].message == warning["message"]
 
 
 @respx.mock
